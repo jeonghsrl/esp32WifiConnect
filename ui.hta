@@ -29,6 +29,7 @@ var tempFolder = shell.ExpandEnvironmentStrings('%TEMP%');
 
 window.onload = function(){
   document.getElementById('prefix').value = readConfigPrefix() || 'ESP32';
+  document.getElementById('clientIp').value = readConfigClientIp() || '192.168.4.100';
   log('Ready. Click Scan to find ESP32 APs.');
 }
 
@@ -50,6 +51,18 @@ function readConfigPrefix(){
   return null;
 }
 
+function readConfigClientIp(){
+  try{
+    var cfgPath = fso.GetAbsolutePathName('config.json');
+    if(!fso.FileExists(cfgPath)) return null;
+    var f = fso.OpenTextFile(cfgPath, 1);
+    var txt = f.ReadAll(); f.Close();
+    var m = txt.match(/"client_ip"\s*:\s*"([^"]+)"/i);
+    if(m) return m[1];
+  }catch(e){ }
+  return null;
+}
+
 function runCmd(cmd){
   try{
     var exec = shell.Exec('cmd /c ' + cmd);
@@ -61,6 +74,63 @@ function runCmd(cmd){
   }catch(e){
     return 'ERROR: ' + e.message;
   }
+}
+
+function extractIPFromOutput(output){
+  // Look for lines that contain IPv4 addresses in various formats
+  var lines = output.split(/\r?\n/);
+  var ips = [];
+  
+  for(var i=0; i<lines.length; i++){
+    var line = lines[i];
+    // Match IPv4 addresses
+    var matches = line.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/g);
+    if(matches){
+      for(var j=0; j<matches.length; j++){
+        var ip = matches[j];
+        var parts = ip.split('.');
+        var valid = true;
+        
+        // Validate IP octets
+        for(var k=0; k<4; k++){
+          if(parseInt(parts[k],10) > 255){
+            valid = false;
+            break;
+          }
+        }
+        
+        if(!valid) continue;
+        
+        // Skip link-local and special addresses
+        if(ip.indexOf('169.254') === 0) continue;
+        if(ip === '0.0.0.0') continue;
+        if(ip === '127.0.0.1') continue;
+        if(ip === '255.255.255.255') continue;
+        
+        // Add if not already found
+        var found = false;
+        for(var idx=0; idx<ips.length; idx++){
+          if(ips[idx] === ip){
+            found = true;
+            break;
+          }
+        }
+        if(!found){
+          ips.push(ip);
+        }
+      }
+    }
+  }
+  
+  // Prefer 192.168.4.x addresses (ESP32 network)
+  for(var i=0; i<ips.length; i++){
+    if(ips[i].indexOf('192.168.4.') === 0){
+      return ips[i];
+    }
+  }
+  
+  // Return first valid IP found
+  return ips.length > 0 ? ips[0] : null;
 }
 
 function scan(){
@@ -107,7 +177,9 @@ function connectSelected(){
   if(sel.selectedIndex<0){ alert('Select an SSID first.'); return; }
   var ssid = sel.options[sel.selectedIndex].value;
   var pwd = prompt('Enter AP password (leave blank for open):','');
+  var clientIp = document.getElementById('clientIp').value || '192.168.4.100';
   log('Connecting to '+ssid+' ...');
+  log('Using client IP: ' + clientIp);
   // create temp profile xml
   try{
     var filePath = tempFolder + '\\esp32_profile.xml';
@@ -153,47 +225,74 @@ function connectSelected(){
     var connOut = runCmd('netsh wlan connect name="""' + ssid + '""" ssid="""' + ssid + '"""');
     log(connOut);
 
-    // poll for connection and IP (write netsh output to temp file then parse via JS)
-    var connectedIp = null;
-    var maxAttempts = 12; // 12 * 5s = 60s
-    var logfile = tempFolder + "\\iface_log_" + Math.floor(Math.random()*100000) + ".txt";
-    log('Poll log: ' + logfile);
+    // Wait for connection to establish
+    log('Waiting 5 seconds for connection to establish...');
+    runCmd('timeout /t 5 >nul');
 
-    for(var attempt=1; attempt<=maxAttempts; attempt++){
-      log('Checking interface (attempt ' + attempt + '/' + maxAttempts + ')...');
-      // write raw netsh output to file
-      runCmd('netsh wlan show interfaces > "' + tempFolder + '\\iface.txt"');
-      // read back the file content through cmd type to avoid encoding issues
-      var iface = runCmd('cmd /c type "' + tempFolder + '\\iface.txt"');
-      // append to logfile
-      runCmd('cmd /c type "' + tempFolder + '\\iface.txt" >> "' + logfile + '"');
-      runCmd('cmd /c echo --- attempt ' + attempt + ' >> "' + logfile + '"');
-
-      // try to find IPv4 addresses excluding 169.254.x.x and 0.0.0.0
-      var m = iface.match(/\b(?!169\.254|0\.0\.0\.0)(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/g);
-      if(m && m.length>0){
-        for(var i=0;i<m.length;i++){
-          var ip = m[i];
-          var parts = ip.split('.');
-          var ok = true;
-          for(var j=0;j<4;j++){ if(parseInt(parts[j],10)>255) ok=false; }
-          if(!ok) continue;
-          // exclude common non-client addresses
-          if(ip.indexOf('169.254')===0) continue;
-          if(ip==='0.0.0.0') continue;
-          connectedIp = ip; break;
-        }
-      }
-
-      if(connectedIp) break;
-      // wait 5 seconds
-      runCmd('timeout /t 5 >nul');
+    // Check connection status and get IP
+    log('Checking connection status...');
+    var statusOutput = runCmd('netsh wlan show interfaces');
+    log(statusOutput);
+    
+    var connectedIp = extractIPFromOutput(statusOutput);
+    
+    if(connectedIp){ 
+      log('Connected. IP: ' + connectedIp);
+      
+      // Set static IP
+      setStaticIp(clientIp);
+      
+      alert('Connect finished. IP: ' + connectedIp); 
+    }
+    else { 
+      log('Warning: Could not detect IP from netsh output. Connection may still be successful.');
+      log('Setting static IP to: ' + clientIp);
+      setStaticIp(clientIp);
+      alert('Connection completed. Static IP set to: ' + clientIp); 
     }
 
-    if(connectedIp){ log('Connected. IP: ' + connectedIp); alert('Connect finished. IP: ' + connectedIp); }
-    else { log('Connection attempt timed out (no IP)'); alert('Connection attempt timed out — IP not found. See: ' + logfile); }
-
   }catch(e){ log('ERROR: ' + e.message); alert('Error during connect: ' + e.message); }
+}
+
+function setStaticIp(clientIp){
+  try{
+    log('Setting static IP to: ' + clientIp);
+    // Get adapter name from netsh wlan show interfaces
+    var iface = runCmd('netsh wlan show interfaces');
+    log('Interface output: ' + iface);
+    
+    var lines = iface.split(/\r?\n/);
+    var adapterName = null;
+    
+    // Find the adapter name line
+    for(var i=0; i<lines.length; i++){
+      var line = lines[i];
+      if(line.indexOf('Name')>=0 && line.indexOf(':')>=0){
+        // Extract everything after the colon as adapter name
+        var colonPos = line.indexOf(':');
+        if(colonPos >= 0){
+          adapterName = line.substring(colonPos + 1).trim();
+          if(adapterName.length > 0) break;
+        }
+      }
+    }
+    
+    if(adapterName && adapterName.length > 0){
+      log('Found adapter: ' + adapterName);
+      var cmd = 'netsh interface ip set address name="' + adapterName + '" static ' + clientIp + ' 255.255.255.0 192.168.4.1';
+      log('Running: ' + cmd);
+      var result = runCmd(cmd);
+      log(result);
+      log('Static IP configuration completed');
+    } else {
+      log('ERROR: Could not find network adapter');
+      log('Attempting alternative method to find adapter...');
+      var allAdapters = runCmd('netsh interface show interface');
+      log(allAdapters);
+    }
+  }catch(e){
+    log('ERROR setting static IP: ' + e.message);
+  }
 }
 
 function disconnect(){
@@ -214,6 +313,10 @@ function openFolder(){
     <input id="prefix" type="text" style="width:200px" />
     <button onclick="scan()">Scan</button>
     <button onclick="openFolder()">Open Repo Folder</button>
+  </div>
+  <div class="row">
+    <label>Client IP:</label>
+    <input id="clientIp" type="text" style="width:200px" placeholder="192.168.4.100" />
   </div>
   <div class="row">
     <label>Found APs:</label>
