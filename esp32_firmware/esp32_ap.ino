@@ -25,6 +25,7 @@
 #define AP_SUBNET 255,255,255,0
 
 WebServer server(80);
+const int LED_PIN = 2; // onboard LED (change if your board uses different pin)
 
 String makeSSID() {
   uint8_t mac[6];
@@ -41,13 +42,47 @@ void handleRoot() {
   body += "<h2>ESP32 AP</h2>";
   body += "<p>SSID: " + WiFi.softAPSSID() + "</p>";
   body += "<p>IP: " + ip.toString() + "</p>";
+  body += "<p>Stations: " + String(WiFi.softAPgetStationNum()) + "</p>";
   body += "</body></html>";
   server.send(200, "text/html", body);
+}
+
+void handleStatus() {
+  String body = "stations=" + String(WiFi.softAPgetStationNum());
+  server.send(200, "text/plain", body);
+}
+
+void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info){
+  if(event == SYSTEM_EVENT_AP_STACONNECTED){
+    Serial.print("[ESP32] Client connected: MAC ");
+    for(int i=0;i<6;i++){
+      if(i) Serial.print(":");
+      if(info.sta_connected.mac[i] < 16) Serial.print("0");
+      Serial.print(info.sta_connected.mac[i], HEX);
+    }
+    Serial.println();
+    Serial.println("[ESP32] 接続完了");
+    // blink LED to indicate connection
+    digitalWrite(LED_PIN, HIGH);
+    delay(200);
+    digitalWrite(LED_PIN, LOW);
+  } else if(event == SYSTEM_EVENT_AP_STADISCONNECTED){
+    Serial.print("[ESP32] Client disconnected: MAC ");
+    for(int i=0;i<6;i++){
+      if(i) Serial.print(":");
+      if(info.sta_disconnected.mac[i] < 16) Serial.print("0");
+      Serial.print(info.sta_disconnected.mac[i], HEX);
+    }
+    Serial.println();
+  }
 }
 
 void setup() {
   Serial.begin(115200);
   delay(500);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
   String ssid = makeSSID();
   Serial.println();
   Serial.print("Starting SoftAP with SSID: "); Serial.println(ssid);
@@ -71,10 +106,14 @@ void setup() {
     WiFi.softAP(ssid.c_str(), AP_PASSWORD, AP_CHANNEL);
   }
 
+  // register event handler
+  WiFi.onEvent(onWiFiEvent);
+
   IPAddress ip = WiFi.softAPIP();
   Serial.print("AP IP address: "); Serial.println(ip);
 
   server.on("/", handleRoot);
+  server.on("/status", handleStatus);
   server.begin();
   Serial.println("HTTP server started on port 80");
 }
