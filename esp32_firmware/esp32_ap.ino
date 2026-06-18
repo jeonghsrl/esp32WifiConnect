@@ -1,4 +1,4 @@
-# Simple ESP32 SoftAP firmware (Arduino)
+// Simple ESP32 SoftAP firmware (Arduino)
 
 /*
   esp32_ap.ino
@@ -6,6 +6,7 @@
 
   - Edit SSID_PREFIX and AP_PASSWORD as needed.
   - If AP_PASSWORD is empty, the AP is open (no password).
+  - By default this sketch configures a static IP for the SoftAP (192.168.4.1).
   - Upload with Arduino IDE (ESP32 boards) or PlatformIO.
 */
 
@@ -16,6 +17,12 @@
 #define SSID_PREFIX "ESP32"
 #define AP_PASSWORD "" // empty => open AP
 #define AP_CHANNEL 1
+
+// Static IP configuration for SoftAP
+#define USE_STATIC_IP 1
+#define AP_IP 192,168,4,1
+#define AP_GATEWAY 192,168,4,1
+#define AP_SUBNET 255,255,255,0
 
 WebServer server(80);
 
@@ -44,6 +51,18 @@ void setup() {
   String ssid = makeSSID();
   Serial.println();
   Serial.print("Starting SoftAP with SSID: "); Serial.println(ssid);
+
+#if USE_STATIC_IP
+  IPAddress localIP(AP_IP);
+  IPAddress gateway(AP_GATEWAY);
+  IPAddress subnet(AP_SUBNET);
+  bool ok = WiFi.softAPConfig(localIP, gateway, subnet);
+  if(!ok) {
+    Serial.println("softAPConfig failed");
+  } else {
+    Serial.print("Configured SoftAP static IP: "); Serial.println(localIP);
+  }
+#endif
 
   if (strlen(AP_PASSWORD) == 0) {
     // Open AP
