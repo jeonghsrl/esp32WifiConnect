@@ -52,29 +52,28 @@ void handleStatus() {
   server.send(200, "text/plain", body);
 }
 
-void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info){
-  if(event == SYSTEM_EVENT_AP_STACONNECTED){
-    Serial.print("[ESP32] Client connected: MAC ");
-    for(int i=0;i<6;i++){
-      if(i) Serial.print(":");
-      if(info.sta_connected.mac[i] < 16) Serial.print("0");
-      Serial.print(info.sta_connected.mac[i], HEX);
-    }
-    Serial.println();
+// Fallback polling to detect client connect/disconnect events.
+// Some ESP32 Arduino core versions changed the WiFi event API; using softAPgetStationNum()
+// polling is robust across versions.
+static int lastStationCount = 0;
+static unsigned long lastCheckMillis = 0;
+const unsigned long CHECK_INTERVAL = 500; // ms
+
+void notifyClientConnected(int newCount){
+  Serial.print("[ESP32] Stations changed: ");
+  Serial.print(lastStationCount);
+  Serial.print(" -> ");
+  Serial.println(newCount);
+  if(newCount > lastStationCount){
     Serial.println("[ESP32] 接続完了");
     // blink LED to indicate connection
     digitalWrite(LED_PIN, HIGH);
     delay(200);
     digitalWrite(LED_PIN, LOW);
-  } else if(event == SYSTEM_EVENT_AP_STADISCONNECTED){
-    Serial.print("[ESP32] Client disconnected: MAC ");
-    for(int i=0;i<6;i++){
-      if(i) Serial.print(":");
-      if(info.sta_disconnected.mac[i] < 16) Serial.print("0");
-      Serial.print(info.sta_disconnected.mac[i], HEX);
-    }
-    Serial.println();
+  } else if(newCount < lastStationCount){
+    Serial.println("[ESP32] 切断検出");
   }
+  lastStationCount = newCount;
 }
 
 void setup() {
@@ -106,8 +105,8 @@ void setup() {
     WiFi.softAP(ssid.c_str(), AP_PASSWORD, AP_CHANNEL);
   }
 
-  // register event handler
-  WiFi.onEvent(onWiFiEvent);
+  // initialize station count
+  lastStationCount = WiFi.softAPgetStationNum();
 
   IPAddress ip = WiFi.softAPIP();
   Serial.print("AP IP address: "); Serial.println(ip);
@@ -120,4 +119,13 @@ void setup() {
 
 void loop() {
   server.handleClient();
+
+  unsigned long now = millis();
+  if(now - lastCheckMillis >= CHECK_INTERVAL){
+    lastCheckMillis = now;
+    int count = WiFi.softAPgetStationNum();
+    if(count != lastStationCount){
+      notifyClientConnected(count);
+    }
+  }
 }
