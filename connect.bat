@@ -177,9 +177,23 @@ if defined adapter_name (
   echo [OK] Found adapter: !adapter_name! >> "%logfile%"
   echo Found adapter: !adapter_name!
   
-  REM ===== ランダムIP生成 =====
-  set /a client_ip=10+!random! %% 190
-  set "client_ip=192.168.4.!client_ip!"
+  REM ===== 固定IP取得 =====
+  set "client_ip="
+  if exist config.json (
+    for /f "usebackq tokens=2 delims=:" %%A in (`findstr /C:"\"client_ip\"" config.json`) do (
+      set ip_temp=%%A
+      set ip_temp=!ip_temp:"=!
+      set ip_temp=!ip_temp: =!
+      set ip_temp=!ip_temp:,=!
+      if not "!ip_temp!"=="" set "client_ip=!ip_temp!"
+    )
+  )
+  
+  REM ===== デフォルト値の設定 =====
+  if not defined client_ip (
+    set "client_ip=192.168.4.100"
+  )
+  
   echo [*] Setting static IP: !client_ip! >> "%logfile%"
   echo Setting static IP: !client_ip!
   echo. >> "%logfile%"
