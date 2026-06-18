@@ -53,7 +53,7 @@ function readConfigPrefix(){
 function runCmd(cmd){
   try{
     var exec = shell.Exec('cmd /c ' + cmd);
-    var out = ' ';
+    var out = '';
     while(!exec.StdOut.AtEndOfStream){
       out += exec.StdOut.ReadLine() + '\n';
     }
@@ -152,20 +152,40 @@ function connectSelected(){
     log(addOut);
     var connOut = runCmd('netsh wlan connect name="""' + ssid + '""" ssid="""' + ssid + '"""');
     log(connOut);
-    // wait a moment
-    runCmd('timeout /t 4 >nul');
-    var iface = runCmd('netsh wlan show interfaces');
-    log(iface);
-    // try to find IPv4 Address
-    var ip = '(not found)';
-    var lines = iface.split(/\r?\n/);
-    for(var i=0;i<lines.length;i++){
-      var l = lines[i].trim();
-      var m = l.match(/IPv4 Address\s*:\s*(.+)/i) || l.match(/IP Address\s*:\s*(.+)/i);
-      if(m){ ip = m[1].trim(); break; }
+
+    // poll for connection and IP
+    var connectedIp = null;
+    var maxAttempts = 8; // 8 * 5s = 40s
+    for(var attempt=1; attempt<=maxAttempts; attempt++){
+      log('Checking interface (attempt ' + attempt + '/' + maxAttempts + ')...');
+      var iface = runCmd('netsh wlan show interfaces');
+      log(iface);
+
+      // try to find IPv4 addresses excluding 169.254.x.x and 0.0.0.0
+      var m = iface.match(/\b(?!169\.254|0\.0\.0\.0)(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/g);
+      if(m && m.length>0){
+        // pick first valid-looking IP
+        for(var i=0;i<m.length;i++){
+          var ip = m[i];
+          // basic sanity check: each octet <=255
+          var ok = true;
+          var parts = ip.split('.');
+          for(var j=0;j<4;j++){ if(parseInt(parts[j],10)>255) ok=false; }
+          if(!ok) continue;
+          // found
+          connectedIp = ip; break;
+        }
+      }
+
+      // if not found, wait and retry
+      if(connectedIp){ break; }
+      // wait 5 seconds
+      runCmd('timeout /t 5 >nul');
     }
-    log('Connection attempt finished. IP: ' + ip);
-    alert('Connect finished. IP: ' + ip);
+
+    if(connectedIp){ log('Connected. IP: ' + connectedIp); alert('Connect finished. IP: ' + connectedIp); }
+    else { log('Connection attempt timed out (no IP)'); alert('Connection attempt timed out — IP not found.'); }
+
   }catch(e){ log('ERROR: ' + e.message); alert('Error during connect: ' + e.message); }
 }
 
