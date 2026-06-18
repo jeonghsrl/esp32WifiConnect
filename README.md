@@ -1,2 +1,21 @@
 # esp32WifiConnect
-Connect esp32 via wifi connection from Labtop
+
+# 概要
+ESP32のAP機能を利用して、ノートPCからESP32のSSIDとIPを見つけて自動的に接続するアプリ。
+
+# 背景と目的
+- ESP32搭載のロボットをwifi経由で制御する際、外部ノートPCでESP32のSSIDを手動で見つけて接続する必要があり、手間がかかる。
+- 外部ノートPCから簡単にESP32のAPに接続できるアプリを作成する。
+
+# 想定ユーザ
+- ノートPCユーザ
+
+## 機能の概要
+
+## 必須の機能
+
+## 制約事項
+
+## 使う技術・ツール
+
+
