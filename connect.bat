@@ -17,6 +17,11 @@ if "%SSID%"=="" (
   echo Invalid selection.
   exit /b 1
 )
+echo.
+echo ========== DEBUG INFO ==========
+echo Selected SSID: %SSID%
+echo.
+
 rem get password from config
 set "password="
 if exist config.json (
@@ -29,28 +34,55 @@ if exist config.json (
 if "%password%"=="" (
   set /p password=Enter AP password (leave blank for open): 
 )
+
+if "%password%"=="" (
+  echo Password: (none - open AP)
+) else (
+  echo Password: (set)
+)
+echo.
+
 echo Connecting to %SSID% ...
+echo Creating Wi-Fi profile...
 rem create profile if password provided
 if "%password%"=="" (
-  netsh wlan connect ssid="%SSID%" name="%SSID%" 2>nul || (
-    echo Unable to connect without profile. Creating open profile...
+  echo Attempting direct connection (no profile needed)...
+  netsh wlan connect ssid="%SSID%" name="%SSID%" 2>nul && (
+    echo Direct connection succeeded
+  ) || (
+    echo Direct connection failed, creating open profile...
     call :create_profile "%SSID%" ""
-    netsh wlan add profile filename="%temp%\esp32_profile.xml" user=current >nul
+    echo Adding profile to Windows...
+    netsh wlan add profile filename="%temp%\esp32_profile.xml" user=current
+    echo Connecting via profile...
     netsh wlan connect name="%SSID%" ssid="%SSID%"
   )
 ) else (
+  echo Creating WPA2 profile...
   call :create_profile "%SSID%" "%password%"
-  netsh wlan add profile filename="%temp%\esp32_profile.xml" user=current >nul
+  echo Adding profile to Windows...
+  netsh wlan add profile filename="%temp%\esp32_profile.xml" user=current
+  echo Connecting via profile...
   netsh wlan connect name="%SSID%" ssid="%SSID%"
 )
 
+echo.
+echo Waiting 3 seconds for connection to establish...
 timeout /t 3 >nul
 
+echo.
+echo Checking connection status...
+netsh wlan show interfaces
+
+echo.
 echo Configuring static IP (192.168.4.x/24)...
 rem Get the Wi-Fi adapter name from netsh
-for /f "tokens=2" %%A in ('netsh wlan show interfaces ^| find "Name"') do (
-  set "adapter_name=%%A"
-  goto :got_adapter
+set "adapter_name="
+for /f "skip=3 tokens=1,*" %%A in ('netsh wlan show interfaces') do (
+  if not "%%B"=="" (
+    set "adapter_name=%%A"
+    goto :got_adapter
+  )
 )
 
 :got_adapter
@@ -61,28 +93,38 @@ if defined adapter_name (
   set /a client_ip=10+!random! %% 190
   set "client_ip=192.168.4.!client_ip!"
   echo Setting static IP: !client_ip!
+  echo.
   
   rem Set static IP using netsh
+  echo Running: netsh interface ip set address name="!adapter_name!" static !client_ip! 255.255.255.0 192.168.4.1
   netsh interface ip set address name="!adapter_name!" static !client_ip! 255.255.255.0 192.168.4.1
   
+  if !errorlevel! equ 0 (
+    echo Static IP set successfully
+  ) else (
+    echo ERROR: Failed to set static IP (errorlevel: !errorlevel!)
+  )
+  
+  echo.
+  echo Waiting 2 seconds for IP to be assigned...
   timeout /t 2 >nul
   
-  echo Waiting for interface to stabilize (10s)...
+  echo.
+  echo Waiting 10 seconds for interface to stabilize...
   timeout /t 10 >nul
   
-  rem Verify IP configuration
-  for /f "tokens=*" %%I in ('netsh interface ip show address "!adapter_name!" ^| find "192.168.4"') do (
-    set "ip_result=%%I"
-  )
-  
-  if defined ip_result (
-    echo Successfully configured static IP!
-    echo !ip_result!
-  ) else (
-    echo Warning: Could not verify IP configuration
-  )
+  echo.
+  echo ========== FINAL NETWORK STATUS ==========
+  netsh wlan show interfaces
+  echo.
+  echo ========== IPv4 ADDRESS ==========
+  netsh interface ipv4 show address "!adapter_name!"
+  echo.
 ) else (
   echo ERROR: Could not find Wi-Fi adapter
+  echo.
+  echo Available adapters:
+  netsh wlan show interfaces
   exit /b 1
 )
 
@@ -95,12 +137,18 @@ if defined cfg_ip (
   set cfg_ip=!cfg_ip:,=!
   echo.
   echo Configured ESP32 IP: !cfg_ip!
-  echo.
   echo You can now access ESP32 at: http://!cfg_ip!/
 )
 
 echo.
-echo Connection completed successfully!
+echo ========== CONNECTION COMPLETED ==========
+echo If connection failed, check:
+echo 1. ESP32 is powered on and SoftAP is running
+echo 2. SSID is broadcasting (check ESP32 serial output)
+echo 3. No password mismatch
+echo 4. Network adapter name (shown above)
+echo.
+pause
 exit /b
 
 :create_profile
