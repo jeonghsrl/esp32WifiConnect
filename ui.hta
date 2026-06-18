@@ -153,38 +153,45 @@ function connectSelected(){
     var connOut = runCmd('netsh wlan connect name="""' + ssid + '""" ssid="""' + ssid + '"""');
     log(connOut);
 
-    // poll for connection and IP
+    // poll for connection and IP (write netsh output to temp file then parse via JS)
     var connectedIp = null;
-    var maxAttempts = 8; // 8 * 5s = 40s
+    var maxAttempts = 12; // 12 * 5s = 60s
+    var logfile = tempFolder + "\\iface_log_" + Math.floor(Math.random()*100000) + ".txt";
+    log('Poll log: ' + logfile);
+
     for(var attempt=1; attempt<=maxAttempts; attempt++){
       log('Checking interface (attempt ' + attempt + '/' + maxAttempts + ')...');
-      var iface = runCmd('netsh wlan show interfaces');
-      log(iface);
+      // write raw netsh output to file
+      runCmd('netsh wlan show interfaces > "' + tempFolder + '\\iface.txt"');
+      // read back the file content through cmd type to avoid encoding issues
+      var iface = runCmd('cmd /c type "' + tempFolder + '\\iface.txt"');
+      // append to logfile
+      runCmd('cmd /c type "' + tempFolder + '\\iface.txt" >> "' + logfile + '"');
+      runCmd('cmd /c echo --- attempt ' + attempt + ' >> "' + logfile + '"');
 
       // try to find IPv4 addresses excluding 169.254.x.x and 0.0.0.0
       var m = iface.match(/\b(?!169\.254|0\.0\.0\.0)(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/g);
       if(m && m.length>0){
-        // pick first valid-looking IP
         for(var i=0;i<m.length;i++){
           var ip = m[i];
-          // basic sanity check: each octet <=255
-          var ok = true;
           var parts = ip.split('.');
+          var ok = true;
           for(var j=0;j<4;j++){ if(parseInt(parts[j],10)>255) ok=false; }
           if(!ok) continue;
-          // found
+          // exclude common non-client addresses
+          if(ip.indexOf('169.254')===0) continue;
+          if(ip==='0.0.0.0') continue;
           connectedIp = ip; break;
         }
       }
 
-      // if not found, wait and retry
-      if(connectedIp){ break; }
+      if(connectedIp) break;
       // wait 5 seconds
       runCmd('timeout /t 5 >nul');
     }
 
     if(connectedIp){ log('Connected. IP: ' + connectedIp); alert('Connect finished. IP: ' + connectedIp); }
-    else { log('Connection attempt timed out (no IP)'); alert('Connection attempt timed out — IP not found.'); }
+    else { log('Connection attempt timed out (no IP)'); alert('Connection attempt timed out — IP not found. See: ' + logfile); }
 
   }catch(e){ log('ERROR: ' + e.message); alert('Error during connect: ' + e.message); }
 }
