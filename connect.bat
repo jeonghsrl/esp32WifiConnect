@@ -44,42 +44,63 @@ if "%password%"=="" (
   netsh wlan connect name="%SSID%" ssid="%SSID%"
 )
 
-echo Waiting for IP assignment (60s timeout)...
-set "ip="
-set "logfile=%temp%\iface_log_%random%.txt"
-echo Poll log: %logfile%
-nrem poll up to 12 times (12*5s = 60s)
-for /L %%N in (1,1,12) do (
-  rem save interface output
-  netsh wlan show interfaces > "%temp%\iface.txt"
-  type "%temp%\iface.txt" >> "%logfile%"
-  echo --- attempt %%N --- >> "%logfile%"
+timeout /t 3 >nul
 
-  rem try to extract IPv4 using PowerShell (robust across locales)  
-  for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "try { Select-String -Path '%temp%\\iface.txt' -Pattern '\\b(?!169\\.254|0\\.0\\.0\\.0)(?:\\d{1,3}\\.){3}\\d{1,3}\\b' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Value } | Select-Object -First 1 } catch { exit 0 }"`) do (
-    set "ip=%%I"
-  )
-
-  if defined ip ( goto :got_ip )
-  timeout /t 5 >nul
+echo Configuring static IP (192.168.4.x/24)...
+rem Get the Wi-Fi adapter name from netsh
+for /f "tokens=2" %%A in ('netsh wlan show interfaces ^| find "Name"') do (
+  set "adapter_name=%%A"
+  goto :got_adapter
 )
 
-:got_ip
-if defined ip (
-  echo Connected. IP: !ip!
-  echo IP found: !ip! >> "%logfile%"
+:got_adapter
+if defined adapter_name (
+  echo Found adapter: !adapter_name!
+  
+  rem Get a random IP in the range 192.168.4.10-192.168.4.200
+  set /a client_ip=10+!random! %% 190
+  set "client_ip=192.168.4.!client_ip!"
+  echo Setting static IP: !client_ip!
+  
+  rem Set static IP using netsh
+  netsh interface ip set address name="!adapter_name!" static !client_ip! 255.255.255.0 192.168.4.1
+  
+  timeout /t 2 >nul
+  
+  echo Waiting for interface to stabilize (10s)...
+  timeout /t 10 >nul
+  
+  rem Verify IP configuration
+  for /f "tokens=*" %%I in ('netsh interface ip show address "!adapter_name!" ^| find "192.168.4"') do (
+    set "ip_result=%%I"
+  )
+  
+  if defined ip_result (
+    echo Successfully configured static IP!
+    echo !ip_result!
+  ) else (
+    echo Warning: Could not verify IP configuration
+  )
 ) else (
-  echo Connection attempt timed out -- IP not found.
-  echo See log: %logfile%
+  echo ERROR: Could not find Wi-Fi adapter
+  exit /b 1
 )
 
 rem show configured esp32_ip from config if present
+set "cfg_ip="
 for /f "tokens=2 delims=:" %%I in ('findstr /C:"\"esp32_ip\"" config.json 2^>nul') do set cfg_ip=%%I
 if defined cfg_ip (
   set cfg_ip=!cfg_ip:"=!
+  set cfg_ip=!cfg_ip: =!
+  set cfg_ip=!cfg_ip:,=!
+  echo.
   echo Configured ESP32 IP: !cfg_ip!
+  echo.
+  echo You can now access ESP32 at: http://!cfg_ip!/
 )
 
+echo.
+echo Connection completed successfully!
 exit /b
 
 :create_profile
