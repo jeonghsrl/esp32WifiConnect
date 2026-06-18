@@ -43,17 +43,52 @@ if "%password%"=="" (
   netsh wlan add profile filename="%temp%\esp32_profile.xml" user=current >nul
   netsh wlan connect name="%SSID%" ssid="%SSID%"
 )
-echo Waiting for connection...
-timeout /t 5 >nul
-netsh wlan show interfaces | findstr /I "SSID" 
-echo ESP32 IP (default): 
-for /f "tokens=2 delims=:" %%I in ('findstr /C:"\"esp32_ip\"" config.json 2^>nul') do set ip=%%I
-if defined ip (
-  set ip=%ip:"=%
-  echo %ip%
-) else (
-  echo 192.168.4.1
+
+echo Waiting for IP assignment (30s timeout)...
+set "ip="
+for /L %%N in (1,1,6) do (
+  rem poll interfaces output
+  netsh wlan show interfaces > "%temp%\iface.txt"
+  rem extract IPv4-like tokens from file
+  for /f "tokens=* delims=" %%L in ('type "%temp%\iface.txt"') do (
+    for %%T in (%%L) do (
+      echo %%T | findstr /R "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
+      if not errorlevel 1 (
+        for /f "tokens=1" %%X in ('echo %%T ^| findstr /R "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"') do (
+          set "candidate=%%X"
+          rem exclude link-local and invalid addresses
+          echo !candidate! | findstr /B "169.254" >nul
+          if errorlevel 1 (
+            echo !candidate! | findstr /C:"0.0.0.0" >nul
+            if errorlevel 1 (
+              rem basic octet check
+              for /f "tokens=1-4 delims=." %%a in ("!candidate!") do (
+                if %%a LEQ 255 if %%b LEQ 255 if %%c LEQ 255 if %%d LEQ 255 (
+                  set "ip=!candidate!" & goto :got_ip
+                )
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+  timeout /t 5 >nul
 )
+:got_ip
+if defined ip (
+  echo Connected. IP: !ip!
+) else (
+  echo Connection attempt timed out -- IP not found.
+)
+
+rem show configured esp32_ip from config if present
+for /f "tokens=2 delims=:" %%I in ('findstr /C:"\"esp32_ip\"" config.json 2^>nul') do set cfg_ip=%%I
+if defined cfg_ip (
+  set cfg_ip=!cfg_ip:"=!
+  echo Configured ESP32 IP: !cfg_ip!
+)
+
 exit /b
 
 :create_profile
