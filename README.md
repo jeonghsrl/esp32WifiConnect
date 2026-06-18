@@ -10,7 +10,7 @@ Windows の標準機能だけで、ESP32 の SoftAP（APモード）へ簡単に
 ## 実行モード（2通り）
 1. バッチモード（.bat）
    - 純粋なバッチスクリプトで netsh を呼び出してスキャン・接続・切断を行う。
-   - 実行方法：`connect.bat` をダブルクリックで実行。
+   - 実行方法：`connect.bat` をダブルクリックまたはコマンドプロンプトで実行。
    - 長所：追加ソフト不要、軽量。短所：表示や操作が簡素。
 
 2. HTML（HTA）モード
@@ -27,6 +27,7 @@ Windows の標準機能だけで、ESP32 の SoftAP（APモード）へ簡単に
 - disconnect.bat         # 切断用
 - ui.hta                 # HTA（HTML）版 GUI
 - README.md
+- esp32_firmware/esp32_ap.ino  # ESP32 用 SoftAP のサンプルファームウェア
 
 設定例（config.json）
 {
@@ -55,6 +56,28 @@ Windows の標準機能だけで、ESP32 の SoftAP（APモード）へ簡単に
 4. 接続完了後に ESP32 の IP を画面に表示。
 
 HTA 内では JavaScript/VBScript で `WScript.Shell` を使い netsh コマンドを実行し、出力をパースして画面に反映します（mshta が標準で利用可）。
+
+## ESP32 ファームウェア（サンプル）
+このリポジトリには、ESP32 を SoftAP モードで動作させるシンプルな Arduino スケッチを含めています。
+
+ファイル
+- esp32_firmware/esp32_ap.ino
+
+機能
+- SSID 名は `SSID_PREFIX-XXXX`（MAC の下位文字列を付加）形式で起動します。デフォルトの SSID プレフィックスは "ESP32" に設定されています。
+- （オプション）パスワードを設定して WPA2-PSK モードで起動可能。パスワードが空ならオープン AP になります。
+- 起動時にシリアルコンソールへ AP 情報（SSID, IP アドレス）を出力します。
+- ポート 80 で簡易 HTTP サーバを立ち上げ、接続確認用のページ（"ESP32 AP" と IP 表示）を返します。
+
+使い方（アップロード）
+1. Arduino IDE または PlatformIO で ESP32 ボード設定を行ってください（ESP32 Dev Module 等）。
+2. `esp32_firmware/esp32_ap.ino` を開き、必要なら `SSID_PREFIX` と `AP_PASSWORD` を編集します。
+3. ボードとポートを選択してアップロードします。
+4. シリアルモニタを開くと、起動時に AP 名と IP（通常 192.168.4.1）を確認できます。接続後ブラウザで `http://192.168.4.1/` にアクセスして確認します。
+
+制約
+- ESP32 用 Arduino コアが必要です（ESP32 Arduino ライブラリ）。
+- HTTP サーバはシンプル実装です。プロダクション用途では認証や堅牢性を追加してください。
 
 ## 注意・制約
 - 対象 OS: Windows 10 / 11（netsh, mshta が利用可能であること）。
