@@ -44,42 +44,33 @@ if "%password%"=="" (
   netsh wlan connect name="%SSID%" ssid="%SSID%"
 )
 
-echo Waiting for IP assignment (30s timeout)...
+echo Waiting for IP assignment (60s timeout)...
 set "ip="
-for /L %%N in (1,1,6) do (
-  rem poll interfaces output
+set "logfile=%temp%\iface_log_%random%.txt"
+echo Poll log: %logfile%
+nrem poll up to 12 times (12*5s = 60s)
+for /L %%N in (1,1,12) do (
+  rem save interface output
   netsh wlan show interfaces > "%temp%\iface.txt"
-  rem extract IPv4-like tokens from file
-  for /f "tokens=* delims=" %%L in ('type "%temp%\iface.txt"') do (
-    for %%T in (%%L) do (
-      echo %%T | findstr /R "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*" >nul
-      if not errorlevel 1 (
-        for /f "tokens=1" %%X in ('echo %%T ^| findstr /R "[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*"') do (
-          set "candidate=%%X"
-          rem exclude link-local and invalid addresses
-          echo !candidate! | findstr /B "169.254" >nul
-          if errorlevel 1 (
-            echo !candidate! | findstr /C:"0.0.0.0" >nul
-            if errorlevel 1 (
-              rem basic octet check
-              for /f "tokens=1-4 delims=." %%a in ("!candidate!") do (
-                if %%a LEQ 255 if %%b LEQ 255 if %%c LEQ 255 if %%d LEQ 255 (
-                  set "ip=!candidate!" & goto :got_ip
-                )
-              )
-            )
-          )
-        )
-      )
-    )
+  type "%temp%\iface.txt" >> "%logfile%"
+  echo --- attempt %%N --- >> "%logfile%"
+
+  rem try to extract IPv4 using PowerShell (robust across locales)  
+  for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "try { Select-String -Path '%temp%\\iface.txt' -Pattern '\\b(?!169\\.254|0\\.0\\.0\\.0)(?:\\d{1,3}\\.){3}\\d{1,3}\\b' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Value } | Select-Object -First 1 } catch { exit 0 }"`) do (
+    set "ip=%%I"
   )
+
+  if defined ip ( goto :got_ip )
   timeout /t 5 >nul
 )
+
 :got_ip
 if defined ip (
   echo Connected. IP: !ip!
+  echo IP found: !ip! >> "%logfile%"
 ) else (
   echo Connection attempt timed out -- IP not found.
+  echo See log: %logfile%
 )
 
 rem show configured esp32_ip from config if present
