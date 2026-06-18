@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<meta charset="utf-8" />
+<title>esp32WifiConnect - HTA</title>
+<HTA:APPLICATION
+  ID="esp32WifiConnect"
+  APPLICATIONNAME="esp32WifiConnect"
+  BORDER="thin"
+  CAPTION="yes"
+  SHOWINTASKBAR="yes"
+  SINGLEINSTANCE="yes"
+  SYSMENU="yes"
+/>
+<style>
+  body{font-family:Segoe UI, Meiryo, Arial; margin:12px}
+  .row{margin-bottom:8px}
+  label{display:inline-block; width:120px}
+  select{width:320px}
+  textarea{width:100%;height:200px}
+  button{margin-right:6px}
+</style>
+<script type="text/javascript">
+// HTA GUI for esp32WifiConnect (uses netsh via WScript.Shell)
+var shell = new ActiveXObject('WScript.Shell');
+var fso = new ActiveXObject('Scripting.FileSystemObject');
+var tempFolder = shell.ExpandEnvironmentStrings('%TEMP%');
+
+window.onload = function(){
+  document.getElementById('prefix').value = readConfigPrefix() || 'ESP32';
+  log('Ready. Click Scan to find ESP32 APs.');
+}
+
+function log(msg){
+  var ta = document.getElementById('log');
+  var time = new Date().toLocaleTimeString();
+  ta.value = '['+time+'] ' + msg + '\n' + ta.value;
+}
+
+function readConfigPrefix(){
+  try{
+    var cfgPath = fso.GetAbsolutePathName('config.json');
+    if(!fso.FileExists(cfgPath)) return null;
+    var f = fso.OpenTextFile(cfgPath, 1);
+    var txt = f.ReadAll(); f.Close();
+    var m = txt.match(/"ssid_prefix"\s*:\s*"([^"]+)"/i);
+    if(m) return m[1];
+  }catch(e){ }
+  return null;
+}
+
+function runCmd(cmd){
+  try{
+    var exec = shell.Exec('cmd /c ' + cmd);
+    var out = ' ';
+    while(!exec.StdOut.AtEndOfStream){
+      out += exec.StdOut.ReadLine() + '\n';
+    }
+    return out;
+  }catch(e){
+    return 'ERROR: ' + e.message;
+  }
+}
+
+function scan(){
+  var prefix = document.getElementById('prefix').value || 'ESP32';
+  log('Scanning for Wi-Fi networks (prefix='+prefix+')...');
+  var raw = runCmd('netsh wlan show networks mode=bssid');
+  if(raw.indexOf('ERROR')===0){ log(raw); return; }
+  var lines = raw.split(/\r?\n/);
+  var ssids = [];
+  for(var i=0;i<lines.length;i++){
+    var line = lines[i].trim();
+    var m = line.match(/^SSID \d+\s*:\s*(.+)$/i);
+    if(m){
+      var ssid = m[1].trim();
+      // look ahead for Signal line
+      var signal = '';
+      for(var j=i+1;j<i+6 && j<lines.length;j++){
+        var ml = lines[j].trim();
+        var mm = ml.match(/^Signal\s*:\s*(.+)$/i);
+        if(mm){ signal = mm[1].trim(); break; }
+      }
+      if(ssid.toLowerCase().indexOf(prefix.toLowerCase())===0){
+        ssids.push({ssid:ssid,signal:signal});
+      }
+    }
+  }
+  var sel = document.getElementById('ssidList');
+  sel.options.length = 0;
+  if(ssids.length===0){
+    log('No matching ESP32 SSID found.');
+    alert('No matching ESP32 SSID found.');
+    return;
+  }
+  for(var k=0;k<ssids.length;k++){
+    var text = ssids[k].ssid + (ssids[k].signal?(' ('+ssids[k].signal+')'):'');
+    var opt = document.createElement('option'); opt.text = text; opt.value = ssids[k].ssid;
+    sel.add(opt);
+  }
+  log('Found '+ssids.length+' SSID(s).');
+}
+
+function connectSelected(){
+  var sel = document.getElementById('ssidList');
+  if(sel.selectedIndex<0){ alert('Select an SSID first.'); return; }
+  var ssid = sel.options[sel.selectedIndex].value;
+  var pwd = prompt('Enter AP password (leave blank for open):','');
+  log('Connecting to '+ssid+' ...');
+  // create temp profile xml
+  try{
+    var filePath = tempFolder + '\\esp32_profile.xml';
+    var ts = fso.CreateTextFile(filePath, true);
+    ts.WriteLine('<?xml version="1.0"?>');
+    ts.WriteLine('<WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1">');
+    ts.WriteLine('  <name>' + ssid + '</name>');
+    ts.WriteLine('  <SSIDConfig>');
+    ts.WriteLine('    <SSID>');
+    ts.WriteLine('      <name>' + ssid + '</name>');
+    ts.WriteLine('    </SSID>');
+    ts.WriteLine('  </SSIDConfig>');
+    ts.WriteLine('  <connectionType>ESS</connectionType>');
+    ts.WriteLine('  <connectionMode>auto</connectionMode>');
+    ts.WriteLine('  <MSM>');
+    ts.WriteLine('    <security>');
+    if(!pwd){
+      ts.WriteLine('      <authEncryption>');
+      ts.WriteLine('        <authentication>open</authentication>');
+      ts.WriteLine('        <encryption>none</encryption>');
+      ts.WriteLine('        <useOneX>false</useOneX>');
+      ts.WriteLine('      </authEncryption>');
+    } else {
+      ts.WriteLine('      <authEncryption>');
+      ts.WriteLine('        <authentication>WPA2PSK</authentication>');
+      ts.WriteLine('        <encryption>AES</encryption>');
+      ts.WriteLine('        <useOneX>false</useOneX>');
+      ts.WriteLine('      </authEncryption>');
+      ts.WriteLine('      <sharedKey>');
+      ts.WriteLine('        <keyType>passPhrase</keyType>');
+      ts.WriteLine('        <protected>false</protected>');
+      ts.WriteLine('        <keyMaterial>' + pwd + '</keyMaterial>');
+      ts.WriteLine('      </sharedKey>');
+    }
+    ts.WriteLine('    </security>');
+    ts.WriteLine('  </MSM>');
+    ts.WriteLine('</WLANProfile>');
+    ts.Close();
+
+    // add profile and connect
+    var addOut = runCmd('netsh wlan add profile filename="""' + filePath + '""" user=current');
+    log(addOut);
+    var connOut = runCmd('netsh wlan connect name="""' + ssid + '""" ssid="""' + ssid + '"""');
+    log(connOut);
+    // wait a moment
+    runCmd('timeout /t 4 >nul');
+    var iface = runCmd('netsh wlan show interfaces');
+    log(iface);
+    // try to find IPv4 Address
+    var ip = '(not found)';
+    var lines = iface.split(/\r?\n/);
+    for(var i=0;i<lines.length;i++){
+      var l = lines[i].trim();
+      var m = l.match(/IPv4 Address\s*:\s*(.+)/i) || l.match(/IP Address\s*:\s*(.+)/i);
+      if(m){ ip = m[1].trim(); break; }
+    }
+    log('Connection attempt finished. IP: ' + ip);
+    alert('Connect finished. IP: ' + ip);
+  }catch(e){ log('ERROR: ' + e.message); alert('Error during connect: ' + e.message); }
+}
+
+function disconnect(){
+  log('Disconnecting...');
+  var out = runCmd('netsh wlan disconnect');
+  log(out);
+}
+
+function openFolder(){
+  try{ shell.Run('explorer.exe "' + fso.GetAbsolutePathName('.') + '"'); }catch(e){}
+}
+</script>
+</head>
+<body>
+  <h3>esp32WifiConnect — HTA GUI</h3>
+  <div class="row">
+    <label>SSID Prefix:</label>
+    <input id="prefix" type="text" style="width:200px" />
+    <button onclick="scan()">Scan</button>
+    <button onclick="openFolder()">Open Repo Folder</button>
+  </div>
+  <div class="row">
+    <label>Found APs:</label>
+    <select id="ssidList" size="6"></select>
+  </div>
+  <div class="row">
+    <button onclick="connectSelected()">Connect</button>
+    <button onclick="disconnect()">Disconnect</button>
+  </div>
+  <div class="row">
+    <label>Status / Log:</label>
+    <textarea id="log" readonly></textarea>
+  </div>
+  <div style="font-size:11px;color:#666;margin-top:8px">Notes: Runs netsh commands. Run on Windows 10/11 with mshta (double-click ui.hta). May require appropriate permissions for profile operations.</div>
+</body>
+</html>
